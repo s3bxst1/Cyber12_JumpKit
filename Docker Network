@@ -1,0 +1,157 @@
+version: '3.8'
+
+networks:
+  jumpkit_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+services:
+  # DNS Server for isolated network operations
+  dns_server:
+    image: pihole/pihole:latest
+    container_name: jumpkit_dns
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "8080:80/tcp"
+    environment:
+      TZ: 'America/New_York'
+      WEBPASSWORD: 'jumpkit2024!'
+      PIHOLE_DNS_: '8.8.8.8;8.8.4.4'
+    volumes:
+      - ./pihole/etc-pihole:/etc/pihole
+      - ./pihole/etc-dnsmasq.d:/etc/dnsmasq.d
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.10
+    restart: unless-stopped
+
+  # Web Server for hosting documentation and tools
+  web_server:
+    image: nginx:alpine
+    container_name: jumpkit_web
+    ports:
+      - "8000:80"
+    volumes:
+      - ./web:/usr/share/nginx/html
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.20
+    depends_on:
+      - dns_server
+    restart: unless-stopped
+
+  # File Server for secure file sharing
+  file_server:
+    image: filebrowser/filebrowser:latest
+    container_name: jumpkit_files
+    ports:
+      - "8081:80"
+    volumes:
+      - ./files:/srv
+      - ./filebrowser.db:/database/filebrowser.db
+      - ./filebrowser.json:/config/settings.json
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.30
+    restart: unless-stopped
+
+  # Database for logging and evidence collection
+  database:
+    image: postgres:15-alpine
+    container_name: jumpkit_db
+    environment:
+      POSTGRES_DB: incident_response
+      POSTGRES_USER: responder
+      POSTGRES_PASSWORD: secure_response_2024
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.40
+    restart: unless-stopped
+
+  # Network monitoring and analysis
+  network_monitor:
+    image: nicolaka/netshoot
+    container_name: jumpkit_monitor
+    command: sleep infinity
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./logs:/logs
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.50
+    restart: unless-stopped
+
+  # Secure communication server
+  chat_server:
+    image: mattermost/mattermost-team-edition:latest
+    container_name: jumpkit_chat
+    ports:
+      - "8082:8065"
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://responder:secure_response_2024@jumpkit_db:5432/incident_response?sslmode=disable
+      MM_SERVICESETTINGS_SITEURL: http://localhost:8082
+    volumes:
+      - ./mattermost/config:/mattermost/config
+      - ./mattermost/data:/mattermost/data
+      - ./mattermost/logs:/mattermost/logs
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.60
+    depends_on:
+      - database
+    restart: unless-stopped
+
+  # Log aggregation server
+  log_server:
+    image: graylog/graylog:5.1
+    container_name: jumpkit_logs
+    ports:
+      - "9000:9000"
+      - "12201:12201/udp"
+    environment:
+      GRAYLOG_PASSWORD_SECRET: somepasswordpepper
+      GRAYLOG_ROOT_PASSWORD_SHA2: 8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      GRAYLOG_HTTP_EXTERNAL_URI: http://localhost:9000/
+    volumes:
+      - ./graylog/data:/usr/share/graylog/data
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.70
+    depends_on:
+      - database
+    restart: unless-stopped
+
+  # Backup and recovery service
+  backup_service:
+    image: restic/restic:latest
+    container_name: jumpkit_backup
+    command: sleep infinity
+    volumes:
+      - ./backups:/backups
+      - ./data:/data:ro
+      - ./scripts:/scripts
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.80
+    restart: unless-stopped
+
+  # Security scanning service
+  security_scanner:
+    image: owasp/zap2docker-stable
+    container_name: jumpkit_scanner
+    command: sleep infinity
+    volumes:
+      - ./scan_results:/zap/wrk
+    networks:
+      jumpkit_network:
+        ipv4_address: 172.20.0.90
+    restart: unless-stopped
